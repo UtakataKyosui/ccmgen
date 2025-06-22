@@ -1,6 +1,9 @@
 use clap::{Parser, Subcommand};
 
 mod commands;
+mod config;
+mod project;
+mod templates;
 
 #[derive(Parser)]
 #[command(about = "Claude Code User Command Initializer", long_about = None)]
@@ -13,29 +16,46 @@ struct Cli {
 enum Commands {
     /// 言語毎のセットアップ
     /// 
-    /// 言語を指定してセットアップを行います。
+    /// プロジェクトを自動検出してセットアップを行います。
     /// 
     /// サポートされている言語:
-    /// - Rust
+    /// - Rust (Normal)
+    /// - Rust (WASM)
     /// - JavaScript
+    /// - TypeScript  
+    /// - Node.js
     Init {
         #[arg(short, long)]
         lang: Option<String>,
         #[arg(long)]
         repo: Option<String>,
+        #[arg(short, long)]
+        path: Option<String>,
     },
+    /// プロジェクト情報を表示
+    Detect {
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+    /// 作成済みコマンドを一覧表示
     List,
+    /// 指定したコマンドを削除
     Remove {
         name: String,
     },
+    /// 設定ファイルを初期化
+    Config,
 }
 
 fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Some(Commands::Init { lang, repo }) => {
-            commands::init(lang.clone(), repo.clone());
+        Some(Commands::Init { lang, repo, path }) => {
+            commands::init(lang.clone(), repo.clone(), path.clone());
+        }
+        Some(Commands::Detect { path }) => {
+            commands::detect(path.clone());
         }
         Some(Commands::List) => {
             commands::list();
@@ -43,8 +63,11 @@ fn main() {
         Some(Commands::Remove { name }) => {
             commands::remove(name);
         }
+        Some(Commands::Config) => {
+            commands::config();
+        }
         None => {
-            println!("✨ Try: claude-cli init");
+            println!("✨ Try: ccmgen init");
         }
     }
 }
