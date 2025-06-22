@@ -1,0 +1,40 @@
+{
+	"mcpServers": {
+		"file-system": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"@modelcontextprotocol/server-filesystem",
+				"~/Documents"
+			]
+		},
+		"github": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"@modelcontextprotocol/server-github"
+			],
+			"env": {
+				"GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_PERSONAL_ACCESS_TOKEN"
+			}
+		},
+		"fetch": {
+			"command": "uvx",
+			"args": ["mcp-server-fetch"]
+		},
+		"docker": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"@modelcontextprotocol/server-docker"
+			]
+		},
+		"sqlite": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"@modelcontextprotocol/server-sqlite"
+			]
+		}
+	}
+}
