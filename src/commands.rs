@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use dialoguer::{theme::ColorfulTheme, Select};
 use dirs::home_dir;
 
-use crate::project::ProjectDetector;
+use crate::project::{ProjectDetector, ProjectContext};
 use crate::templates::TemplateManager;
+use crate::smart_templates::SmartTemplateManager;
 use crate::config::ConfigManager;
 
 /// 言語ごとのテンプレート定義
@@ -83,15 +84,16 @@ pub fn init(lang: Option<String>, repo: Option<String>, path: Option<String>) {
         .unwrap_or_else(|| std::env::current_dir().expect("カレントディレクトリの取得に失敗しました"));
 
     // プロジェクト自動検出を試行
-    let project_info = if lang.is_none() {
-        ProjectDetector::detect_project(&target_path)
+    let project_context = if lang.is_none() {
+        ProjectDetector::create_project_context(&target_path)
     } else {
         None
     };
 
-    let templates = if let Some(ref project) = project_info {
-        println!("🔍 プロジェクトを検出しました: {} ({:?})", project.name, project.project_type);
-        TemplateManager::get_templates_for_project(project)
+    let templates = if let Some(ref context) = project_context {
+        println!("🔍 プロジェクトを検出しました: {} ({:?})", context.info.name, context.info.project_type);
+        println!("💡 {} 個のプロジェクト固有コマンドを含みます", context.suggested_commands.len());
+        SmartTemplateManager::create_enhanced_init_templates(context)
     } else {
         // 手動選択または古いロジック
         let legacy_templates = get_language_templates();
@@ -112,7 +114,7 @@ pub fn init(lang: Option<String>, repo: Option<String>, path: Option<String>) {
         legacy_templates
             .iter()
             .find(|(l, _)| *l == selected_lang)
-            .map(|(_, t)| t.clone())
+            .map(|(_, t)| t.iter().map(|(name, content)| (name.to_string(), content.to_string())).collect())
             .expect("テンプレートが見つかりません")
     };
 
@@ -120,15 +122,9 @@ pub fn init(lang: Option<String>, repo: Option<String>, path: Option<String>) {
     fs::create_dir_all(&cmd_dir).expect("コマンドディレクトリの作成に失敗しました");
 
     for (name, body) in templates {
-        let final_body = if let Some(ref project) = project_info {
-            TemplateManager::create_project_specific_template(project, name, body)
-        } else {
-            body.to_string()
-        };
-
-        match save_command(name, &final_body) {
-            Ok(_) => println!("✅ {name}.md を作成しました"),
-            Err(e) => eprintln!("❌ {name}.md の作成に失敗しました: {}", e),
+        match save_command(&name, &body) {
+            Ok(_) => println!("✅ {}.md を作成しました", name),
+            Err(e) => eprintln!("❌ {}.md の作成に失敗しました: {}", name, e),
         }
     }
 
@@ -169,5 +165,76 @@ pub fn config() {
     match ConfigManager::create_default_config() {
         Ok(_) => println!("🎉 設定ファイルが作成されました"),
         Err(e) => eprintln!("❌ 設定ファイルの作成に失敗しました: {}", e),
+    }
+}
+
+/// `ccmgen analyze` コマンド
+pub fn analyze(path: Option<String>) {
+    let target_path = path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().expect("カレントディレクトリの取得に失敗しました"));
+
+    match ProjectDetector::create_project_context(&target_path) {
+        Some(context) => {
+            println!("🔍 プロジェクト詳細分析結果:");
+            print_project_context(&context);
+        }
+        None => {
+            println!("❓ 対応するプロジェクトタイプが見つかりませんでした");
+        }
+    }
+}
+
+fn print_project_context(context: &ProjectContext) {
+    let info = &context.info;
+    let structure = &context.structure;
+    
+    println!("📋 基本情報:");
+    println!("  名前: {}", info.name);
+    println!("  種別: {:?}", info.project_type);
+    println!("  パス: {}", info.path.display());
+    
+    if !info.features.is_empty() {
+        println!("  機能: {}", info.features.join(", "));
+    }
+
+    println!("\n📁 ファイル構成:");
+    println!("  ソースファイル: {}個", structure.source_files.len());
+    println!("  テストファイル: {}個", structure.test_files.len());
+    println!("  設定ファイル: {}個", structure.config_files.len());
+    println!("  ドキュメント: {}個", structure.doc_files.len());
+    println!("  エントリーポイント: {}個", structure.entry_points.len());
+
+    if !structure.dependencies.is_empty() {
+        println!("\n📦 主要な依存関係:");
+        let mut deps: Vec<_> = structure.dependencies.iter().collect();
+        deps.sort_by_key(|(name, _)| name.as_str());
+        for (name, version) in deps.iter().take(10) {
+            println!("  {} = {}", name, version);
+        }
+        if structure.dependencies.len() > 10 {
+            println!("  ... 他{}個", structure.dependencies.len() - 10);
+        }
+    }
+
+    if !structure.scripts.is_empty() {
+        println!("\n🔧 利用可能なスクリプト:");
+        let mut scripts: Vec<_> = structure.scripts.iter().collect();
+        scripts.sort_by_key(|(name, _)| name.as_str());
+        for (name, command) in scripts.iter().take(8) {
+            println!("  {}: {}", name, command);
+        }
+        if structure.scripts.len() > 8 {
+            println!("  ... 他{}個", structure.scripts.len() - 8);
+        }
+    }
+
+    if !context.suggested_commands.is_empty() {
+        println!("\n💡 推奨プロジェクト固有コマンド:");
+        for cmd in &context.suggested_commands {
+            println!("  - {}", cmd);
+        }
+        println!("\n🚀 これらのコマンドを生成するには:");
+        println!("   ccmgen init --path {}", info.path.display());
     }
 }

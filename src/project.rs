@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::fs;
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -19,6 +20,24 @@ pub struct ProjectInfo {
     pub features: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectStructure {
+    pub source_files: Vec<PathBuf>,
+    pub test_files: Vec<PathBuf>,
+    pub config_files: Vec<PathBuf>,
+    pub doc_files: Vec<PathBuf>,
+    pub dependencies: HashMap<String, String>,
+    pub scripts: HashMap<String, String>,
+    pub entry_points: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectContext {
+    pub info: ProjectInfo,
+    pub structure: ProjectStructure,
+    pub suggested_commands: Vec<String>,
+}
+
 pub struct ProjectDetector;
 
 impl ProjectDetector {
@@ -30,6 +49,86 @@ impl ProjectDetector {
         } else {
             None
         }
+    }
+
+    pub fn analyze_project_structure(project: &ProjectInfo) -> ProjectStructure {
+        let mut structure = ProjectStructure::new();
+        
+        structure.scan_directory(&project.path);
+        structure.extract_metadata(project);
+        structure
+    }
+
+    pub fn create_project_context(path: &Path) -> Option<ProjectContext> {
+        let info = Self::detect_project(path)?;
+        let structure = Self::analyze_project_structure(&info);
+        let suggested_commands = Self::suggest_commands(&info, &structure);
+
+        Some(ProjectContext {
+            info,
+            structure,
+            suggested_commands,
+        })
+    }
+
+    fn suggest_commands(info: &ProjectInfo, structure: &ProjectStructure) -> Vec<String> {
+        let mut commands = Vec::new();
+
+        // プロジェクト固有のコマンド提案
+        match info.project_type {
+            ProjectType::RustNormal => {
+                if !structure.test_files.is_empty() {
+                    commands.push("run-specific-test".to_string());
+                }
+                if structure.dependencies.contains_key("tokio") || structure.dependencies.contains_key("async-std") {
+                    commands.push("async-refactor".to_string());
+                }
+                if structure.dependencies.contains_key("serde") {
+                    commands.push("serialization-helper".to_string());
+                }
+            },
+            ProjectType::RustWasm => {
+                commands.push("wasm-size-analysis".to_string());
+                commands.push("js-binding-generator".to_string());
+                if structure.config_files.iter().any(|p| p.file_name().unwrap_or_default() == "webpack.config.js") {
+                    commands.push("webpack-wasm-optimization".to_string());
+                }
+            },
+            ProjectType::JavaScript | ProjectType::TypeScript => {
+                if structure.scripts.contains_key("test") {
+                    commands.push("test-coverage-analysis".to_string());
+                }
+                if structure.dependencies.contains_key("react") {
+                    commands.push("react-component-generator".to_string());
+                }
+                if structure.dependencies.contains_key("vue") {
+                    commands.push("vue-component-generator".to_string());
+                }
+            },
+            ProjectType::NodeJs => {
+                if structure.dependencies.contains_key("express") {
+                    commands.push("express-route-generator".to_string());
+                }
+                if structure.dependencies.contains_key("mongoose") || structure.dependencies.contains_key("prisma") {
+                    commands.push("database-model-generator".to_string());
+                }
+            },
+        }
+
+        // ファイル構造に基づく提案
+        if structure.doc_files.is_empty() {
+            commands.push("documentation-generator".to_string());
+        }
+        
+        if structure.config_files.iter().any(|p| p.file_name().unwrap_or_default() == "Dockerfile") {
+            commands.push("docker-optimization".to_string());
+        }
+
+        if structure.config_files.iter().any(|p| p.file_name().unwrap_or_default() == ".github") {
+            commands.push("ci-cd-enhancement".to_string());
+        }
+
+        commands
     }
 
     fn detect_rust_project(path: &Path) -> Option<ProjectInfo> {
@@ -176,5 +275,167 @@ impl ProjectDetector {
         }
 
         false
+    }
+}
+
+impl ProjectStructure {
+    pub fn new() -> Self {
+        Self {
+            source_files: Vec::new(),
+            test_files: Vec::new(),
+            config_files: Vec::new(),
+            doc_files: Vec::new(),
+            dependencies: HashMap::new(),
+            scripts: HashMap::new(),
+            entry_points: Vec::new(),
+        }
+    }
+
+    pub fn scan_directory(&mut self, path: &Path) {
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    self.categorize_file(&path);
+                } else if path.is_dir() && !self.should_skip_directory(&path) {
+                    self.scan_directory(&path);
+                }
+            }
+        }
+    }
+
+    fn categorize_file(&mut self, path: &Path) {
+        if let Some(extension) = path.extension().and_then(|s| s.to_str()) {
+            match extension {
+                "rs" => {
+                    if path.to_string_lossy().contains("test") || 
+                       path.file_name().unwrap_or_default().to_string_lossy().starts_with("test_") {
+                        self.test_files.push(path.to_path_buf());
+                    } else {
+                        self.source_files.push(path.to_path_buf());
+                    }
+                },
+                "js" | "jsx" | "ts" | "tsx" => {
+                    if path.to_string_lossy().contains("test") || 
+                       path.to_string_lossy().contains("spec") ||
+                       path.file_name().unwrap_or_default().to_string_lossy().contains(".test.") {
+                        self.test_files.push(path.to_path_buf());
+                    } else {
+                        self.source_files.push(path.to_path_buf());
+                    }
+                },
+                "toml" | "json" | "yaml" | "yml" | "config" => {
+                    self.config_files.push(path.to_path_buf());
+                },
+                "md" | "rst" | "txt" => {
+                    self.doc_files.push(path.to_path_buf());
+                },
+                _ => {}
+            }
+        }
+
+        // 特別なファイル名の処理
+        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+            match filename {
+                "Dockerfile" | ".dockerignore" | "docker-compose.yml" | "docker-compose.yaml" => {
+                    self.config_files.push(path.to_path_buf());
+                },
+                "main.rs" | "lib.rs" | "index.js" | "index.ts" | "app.js" | "app.ts" => {
+                    self.entry_points.push(path.to_path_buf());
+                },
+                _ => {}
+            }
+        }
+    }
+
+    fn should_skip_directory(&self, path: &Path) -> bool {
+        if let Some(dirname) = path.file_name().and_then(|s| s.to_str()) {
+            matches!(dirname, "target" | "node_modules" | ".git" | "dist" | "build" | ".next")
+        } else {
+            false
+        }
+    }
+
+    pub fn extract_metadata(&mut self, project: &ProjectInfo) {
+        match project.project_type {
+            ProjectType::RustNormal | ProjectType::RustWasm => {
+                self.extract_rust_metadata(&project.path);
+            },
+            ProjectType::JavaScript | ProjectType::TypeScript | ProjectType::NodeJs => {
+                self.extract_js_metadata(&project.path);
+            },
+        }
+    }
+
+    fn extract_rust_metadata(&mut self, path: &Path) {
+        let cargo_path = path.join("Cargo.toml");
+        if let Ok(content) = fs::read_to_string(&cargo_path) {
+            if let Ok(cargo_toml) = toml::from_str::<toml::Value>(&content) {
+                // 依存関係の抽出
+                if let Some(deps) = cargo_toml.get("dependencies") {
+                    if let Some(deps_table) = deps.as_table() {
+                        for (name, value) in deps_table {
+                            let version = match value {
+                                toml::Value::String(v) => v.clone(),
+                                toml::Value::Table(t) => {
+                                    t.get("version").and_then(|v| v.as_str()).unwrap_or("*").to_string()
+                                },
+                                _ => "*".to_string(),
+                            };
+                            self.dependencies.insert(name.clone(), version);
+                        }
+                    }
+                }
+
+                // スクリプト（ビルドスクリプトなど）の抽出
+                if let Some(package) = cargo_toml.get("package") {
+                    if let Some(build) = package.get("build") {
+                        if let Some(build_script) = build.as_str() {
+                            self.scripts.insert("build".to_string(), build_script.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn extract_js_metadata(&mut self, path: &Path) {
+        let package_path = path.join("package.json");
+        if let Ok(content) = fs::read_to_string(&package_path) {
+            if let Ok(package_json) = serde_json::from_str::<serde_json::Value>(&content) {
+                // 依存関係の抽出
+                if let Some(deps) = package_json.get("dependencies") {
+                    if let Some(deps_obj) = deps.as_object() {
+                        for (name, value) in deps_obj {
+                            if let Some(version) = value.as_str() {
+                                self.dependencies.insert(name.clone(), version.to_string());
+                            }
+                        }
+                    }
+                }
+
+                // dev依存関係の抽出
+                if let Some(dev_deps) = package_json.get("devDependencies") {
+                    if let Some(dev_deps_obj) = dev_deps.as_object() {
+                        for (name, value) in dev_deps_obj {
+                            if let Some(version) = value.as_str() {
+                                self.dependencies.insert(format!("dev:{}", name), version.to_string());
+                            }
+                        }
+                    }
+                }
+
+                // スクリプトの抽出
+                if let Some(scripts) = package_json.get("scripts") {
+                    if let Some(scripts_obj) = scripts.as_object() {
+                        for (name, value) in scripts_obj {
+                            if let Some(script) = value.as_str() {
+                                self.scripts.insert(name.clone(), script.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

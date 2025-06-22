@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod config;
 mod project;
+mod smart_templates;
 mod templates;
 
 #[derive(Parser)]
@@ -45,6 +46,11 @@ enum Commands {
     },
     /// 設定ファイルを初期化
     Config,
+    /// プロジェクト詳細分析と推奨コマンド表示
+    Analyze {
+        #[arg(short, long)]
+        path: Option<String>,
+    },
 }
 
 fn main() {
@@ -65,6 +71,9 @@ fn main() {
         }
         Some(Commands::Config) => {
             commands::config();
+        }
+        Some(Commands::Analyze { path }) => {
+            commands::analyze(path.clone());
         }
         None => {
             println!("✨ Try: ccmgen init");
